@@ -48,6 +48,10 @@
 #include <linux/platform_device.h>
 
 #include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+#include <linux/gpio/machine.h>
+#include <asm-generic/gpio.h>
+#endif
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 18, 0)
 #include <linux/i2c-gpio.h>
 #else
@@ -93,6 +97,27 @@ module_param_array(bus3, uint, &bus_nump[3], 0);
 MODULE_PARM_DESC(bus3, "bus3" BUS_PARM_DESC);
 
 static struct platform_device *devices[BUS_COUNT_MAX];
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+
+#define BUS_NAME_MAX           32
+
+#define GPIOD_TABLE_TEMPLATE {.dev_id=NULL, .table={GPIO_LOOKUP(NULL, 0, "sda", GPIO_OPEN_DRAIN), GPIO_LOOKUP(NULL, 0, "scl", GPIO_OPEN_DRAIN), {}}}
+static struct gpiod_lookup_table gpiod_table_0=GPIOD_TABLE_TEMPLATE;
+static struct gpiod_lookup_table gpiod_table_1=GPIOD_TABLE_TEMPLATE;
+static struct gpiod_lookup_table gpiod_table_2=GPIOD_TABLE_TEMPLATE;
+static struct gpiod_lookup_table gpiod_table_3=GPIOD_TABLE_TEMPLATE;
+#undef GPIOD_TABLE_TEMPLATE
+
+static struct gpiod_lookup_table *gpiod_tables[BUS_COUNT_MAX]={
+	&gpiod_table_0,
+	&gpiod_table_1,
+	&gpiod_table_2,
+	&gpiod_table_3
+};
+
+#endif
+
 static unsigned int nr_devices;
 
 static void i2c_gpio_custom_cleanup(void)
@@ -102,6 +127,13 @@ static void i2c_gpio_custom_cleanup(void)
 	for (i = 0; i < nr_devices; i++)
 		if (devices[i])
 			platform_device_put(devices[i]);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+	for (i = 0; i < nr_devices; i++) {
+		gpiod_remove_lookup_table(gpiod_tables[i]);
+		kfree(gpiod_tables[i]->dev_id);
+	}
+#endif
 }
 
 static int __init i2c_gpio_custom_add_one(unsigned int id, unsigned int *params)
@@ -109,6 +141,11 @@ static int __init i2c_gpio_custom_add_one(unsigned int id, unsigned int *params)
 	struct platform_device *pdev;
 	struct i2c_gpio_platform_data pdata;
 	int err;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+	struct gpiod_lookup_table *gpiod_table;
+	struct gpio_chip *chip_sda, *chip_scl;
+	char* dev_id;
+#endif
 
 	if (!bus_nump[id])
 		return 0;
@@ -119,14 +156,51 @@ static int __init i2c_gpio_custom_add_one(unsigned int id, unsigned int *params)
 		goto err;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+	gpiod_table = gpiod_tables[id];
+
+	chip_sda = gpio_to_chip(params[BUS_PARAM_SDA]);
+	if (!chip_sda) {
+		printk(KERN_ERR PFX "nonexistent GPIO %d for bus%d SDA\n", params[BUS_PARAM_SDA], id);
+		err = -EINVAL;
+		goto err;
+	}
+	gpiod_table->table[0].chip_label = chip_sda->label;
+	gpiod_table->table[0].chip_hwnum = params[BUS_PARAM_SDA] - chip_sda->base;
+
+	chip_scl = gpio_to_chip(params[BUS_PARAM_SCL]);
+	if (!chip_scl) {
+		printk(KERN_ERR PFX "nonexistent GPIO %d for bus%d SCL\n", params[BUS_PARAM_SCL], id);
+		err = -EINVAL;
+		goto err;
+	}
+	gpiod_table->table[1].chip_label = chip_scl->label;
+	gpiod_table->table[1].chip_hwnum = params[BUS_PARAM_SCL] - chip_scl->base;
+
+	dev_id = kmalloc(BUS_NAME_MAX+1, GFP_KERNEL);
+	if (snprintf(dev_id, BUS_NAME_MAX+1, "i2c-gpio.%d", params[BUS_PARAM_ID]) >= BUS_NAME_MAX+1) {
+		printk(KERN_ERR PFX "bus id %d too large\n", id);
+		err = -EINVAL;
+		goto err_free;
+	}
+	gpiod_table->dev_id = dev_id;
+	gpiod_add_lookup_table(gpiod_table);
+#endif
+
 	pdev = platform_device_alloc("i2c-gpio", params[BUS_PARAM_ID]);
 	if (!pdev) {
 		err = -ENOMEM;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+		goto err_remove;
+#else
 		goto err;
+#endif
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
 	pdata.sda_pin = params[BUS_PARAM_SDA];
 	pdata.scl_pin = params[BUS_PARAM_SCL];
+#endif
 	pdata.udelay = params[BUS_PARAM_UDELAY];
 	pdata.timeout = params[BUS_PARAM_TIMEOUT];
 	pdata.sda_is_open_drain = params[BUS_PARAM_SDA_OD] != 0;
@@ -146,6 +220,15 @@ static int __init i2c_gpio_custom_add_one(unsigned int id, unsigned int *params)
 
 err_put:
 	platform_device_put(pdev);
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
+err_remove:
+	gpiod_remove_lookup_table(gpiod_table);
+
+err_free:
+	kfree(dev_id);
+#endif
+
 err:
 	return err;
 }
