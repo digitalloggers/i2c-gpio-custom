@@ -125,8 +125,10 @@ static void i2c_gpio_custom_cleanup(void)
 	int i;
 
 	for (i = 0; i < nr_devices; i++)
-		if (devices[i])
+		if (devices[i]) {
+			platform_device_del(devices[i]);
 			platform_device_put(devices[i]);
+		}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
 	for (i = 0; i < nr_devices; i++) {
