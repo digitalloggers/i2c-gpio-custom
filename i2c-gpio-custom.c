@@ -100,8 +100,10 @@ static void i2c_gpio_custom_cleanup(void)
 	int i;
 
 	for (i = 0; i < nr_devices; i++)
-		if (devices[i])
+		if (devices[i]) {
+			platform_device_del(devices[i]);
 			platform_device_put(devices[i]);
+		}
 }
 
 static int __init i2c_gpio_custom_add_one(unsigned int id, unsigned int *params)
